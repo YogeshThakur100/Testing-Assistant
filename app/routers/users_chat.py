@@ -1,4 +1,6 @@
 from datetime import timedelta
+import json
+from typing import Dict, List
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from database.session import get_db
@@ -13,8 +15,15 @@ from datetime import datetime
 from langchain_core.messages import HumanMessage , AIMessage , SystemMessage
 from langchain_openai import ChatOpenAI
 from uuid import UUID
+from pydantic import BaseModel
+from langchain_core.output_parsers import PydanticOutputParser
+
+class ManualTestOutput(BaseModel):
+    bdd : str
+    excel_format : List[Dict[str, str]]
 
 app = APIRouter()
+parser = PydanticOutputParser(pydantic_object=ManualTestOutput)
 
 ################helper function###################
 
@@ -100,25 +109,27 @@ def chat_message(chat_id : str , data : users_chat_schema.UserMessageBase , payl
             else:
                 chat_history.append(AIMessage(content=msg.content))
 
+    format_instructions = parser.get_format_instructions()
+
     base_prompt = f"""
     You are a professional AI assistant designed exclusively for manual testers.
 
     You must generate structured manual testing artifacts only.
 
-    Global Chat Requirements:
-    {chat.requirements}
+    You MUST generate the response strictly in valid JSON format.
 
-    Follow these requirements strictly unless explicitly overridden by the user.
+    Rules:
+    Return the bdd in the gherkin format
+    1. The "bdd" field must contain complete BDD (Gherkin) scenarios using:
+    Feature:
+    Scenario:
+    Given
+    When
+    Then
+    And
 
-    Never generate automation code.
-    Never generate programming scripts.
-    Keep output clear, structured, and business readable.
-    """
-
-    excel_format_instruction = """
-    Output Format: Excel-Ready Manual Test Cases
-
-    You MUST generate output in table format with the following columns:
+    2. The "excel_format" field must contain Excel-ready manual test cases 
+    with the following columns: 
 
     Test ID
     User Role (if applicable)
@@ -130,39 +141,27 @@ def chat_message(chat_id : str , data : users_chat_schema.UserMessageBase , payl
     Test Data
     Steps
     Expected Result
+    Return the excel in the proper excel format
 
-    Rules:
-    - Test IDs must be sequential (TC-001, TC-002, etc.)
-    - Steps must be clearly numbered
-    - Expected Result must directly correspond to steps
-    - Do not generate code
-    - Do not skip any column
-    - Include edge cases if mentioned in requirements
+    3. Test IDs must be sequential (TC-001, TC-002, etc.)
+    4. Include positive, negative, and edge cases where applicable.
+    5. Do NOT generate automation code.
+    6. Do NOT generate programming scripts.
+    7. Do NOT include explanations outside the JSON.
+    8. Do NOT wrap the JSON in markdown.
+    9. Return ONLY valid JSON.
+    10. If the JSON is invalid, regenerate internally before responding.
+
+    Global Chat Requirements:
+    {chat.requirements}
+
+    STRICT RULES:
+    - Do not generate automation code
+    - Do not generate programming scripts
+    - Keep output business-readable
+
+    {format_instructions}
     """
-
-    bdd_format_instruction = """
-    Output Format: BDD (Gherkin)
-
-    You MUST generate output using:
-
-    Feature:
-    Scenario:
-    Given
-    When
-    Then
-    And
-
-    Rules:
-    - Use clear business-readable language
-    - No technical automation bindings
-    - No programming syntax
-    - Each scenario must be complete and structured
-    """
-
-    if chat.output_format == 'excel':
-        final_system_prompt = base_prompt + excel_format_instruction
-    else:
-        final_system_prompt = base_prompt + bdd_format_instruction
 
     api_key = JWTutils.decrypt_api_key(existing_user.api_key)
 
@@ -174,7 +173,7 @@ def chat_message(chat_id : str , data : users_chat_schema.UserMessageBase , payl
     )
 
     response = llm.invoke([
-    SystemMessage(content=final_system_prompt),
+    SystemMessage(content=base_prompt),
     *chat_history,
     HumanMessage(content=data.message)
     ])
@@ -197,13 +196,17 @@ def chat_message(chat_id : str , data : users_chat_schema.UserMessageBase , payl
 
     db.commit()
 
+    parsed_output = parser.parse(response.content)
+
+
     return JSONResponse(
         status_code=200,
         content={
-            "success" : True,
-            "message" : "Response received",
-            "data" : {
-                "response" : response.content
+            "success": True,
+            "message": "Response received",
+            "data": {
+                "bdd": dependecies.format_bdd(parsed_output.bdd),
+                "excel_format": dependecies.convert_json_to_csv(parsed_output.excel_format)
             }
         }
     )
@@ -237,37 +240,73 @@ def list_chats(payload : dict = Depends(dependecies.verify_token) , db : Session
 
 
 
+
+
 @app.get('/chat_history/{chat_id}')
-def chat_history_by_chat_id(chat_id : UUID , db : Session = Depends(get_db) , payload : dict = Depends(dependecies.verify_token)):
-    chat = get_chat_by_chatId(chat_id , payload['user_id'] , db)
+def chat_history_by_chat_id(
+    chat_id: UUID,
+    db: Session = Depends(get_db),
+    payload: dict = Depends(dependecies.verify_token)
+):
+    chat = get_chat_by_chatId(chat_id, payload['user_id'], db)
+
     if not chat:
         return JSONResponse(
             status_code=404,
             content={
-                "success" : False,
-                "message" : "Chat not found"
+                "success": False,
+                "message": "Chat not found"
             }
         )
-    chat_messages = get_messages_by_chatID(chat_id , db)
 
-    chat_history = [
-        {
-            "msg_id" : str(msgs.id),
-            "role" : msgs.role,
-            "content" : msgs.content
-        }
-        for msgs in chat_messages
-    ]
+    chat_messages = get_messages_by_chatID(chat_id, db)
+    chat_history = []
 
+    for msgs in chat_messages:
+
+        # 🟢 USER MESSAGE
+        if msgs.role == 'user':
+            chat_history.append({
+                "msg_id": str(msgs.id),
+                "role": msgs.role,
+                "content": msgs.content
+            })
+
+        # 🔵 ASSISTANT MESSAGE
+        else:
+            try:
+                # If stored as string → parse
+                if isinstance(msgs.content, str):
+                    data = json.loads(msgs.content)
+                else:
+                    data = msgs.content
+
+            except Exception:
+                # If parsing fails, fallback safely
+                data = {
+                    "bdd": "",
+                    "excel_format": ""
+                }
+
+
+
+            chat_history.append({
+                "msg_id": str(msgs.id),
+                "role": msgs.role,
+                "content": {
+                    "bdd" : dependecies.format_bdd(data.get('bdd')),
+                    "excel_format" : dependecies.convert_json_to_csv(data.get('excel_format'))
+                }
+            })
 
     return JSONResponse(
         status_code=200,
         content={
-            "success" : True,
-            "message" : "Chat History received",
-            "data" : {
-                "chats" : chat_history
-            } 
+            "success": True,
+            "message": "Chat History received",
+            "data": {
+                "chats": chat_history
+            }
         }
     )
 

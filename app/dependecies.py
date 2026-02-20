@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from models import users_model
 from database.session import get_db
 import JWTutils
+import csv
+import io 
 
 
 Oauth2_scheme = OAuth2PasswordBearer(tokenUrl='/api/users/login')
@@ -81,4 +83,23 @@ def vertify_reset_password_token(token: str = Depends(Oauth2_scheme) , db : Sess
             detail="Internal server error"
         )
 
+def format_bdd(bdd: str) -> str:
+    return f"""```gherkin
+{bdd or ""}
+```"""
 
+
+def convert_json_to_csv(data: list) -> str:
+    if not data:
+        return ""
+
+    output = io.StringIO()
+    
+    # Use keys from first row as headers
+    headers = data[0].keys()
+    
+    writer = csv.DictWriter(output, fieldnames=headers)
+    writer.writeheader()
+    writer.writerows(data)
+
+    return output.getvalue()
