@@ -7,9 +7,7 @@ class OutputFormat(str , Enum):
     bdd = "bdd"
 
 class UserChatBase(BaseModel):
-    title : Optional[str] = "New Chat"
     requirements : Optional[str] = None
-    output_format : OutputFormat
 
 
 class UserMessageBase(BaseModel):
@@ -18,4 +16,3 @@ class UserMessageBase(BaseModel):
 class UserChatUpdateBase(BaseModel):
     title : Optional[str] = None
     requirements : Optional[str] = None
-    output_format : Optional[OutputFormat] = None

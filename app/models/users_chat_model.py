@@ -11,9 +11,8 @@ class UserChat(Base):
     __tablename__ = "usersChat"
     id = Column(UUID , primary_key=True , index = True , default=uuid.uuid4)
     user_id = Column(Integer , ForeignKey("users.id" ,ondelete="CASCADE"))
-    title = Column(String , default=None)
+    title = Column(String , default="New Chat")
     requirements = Column(String , default=None)
-    output_format = Column(String , default=None)
     created_at = Column(TIMESTAMP(timezone=True) , default=datetime.utcnow)
 
     user = relationship(

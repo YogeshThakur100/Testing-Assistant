@@ -17,6 +17,7 @@ from langchain_openai import ChatOpenAI
 from uuid import UUID
 from pydantic import BaseModel
 from langchain_core.output_parsers import PydanticOutputParser
+from openai import OpenAI
 
 class ManualTestOutput(BaseModel):
     bdd : str
@@ -44,9 +45,7 @@ def get_list_of_chats_by_user_id(user_id : str , db : Session):
 def create_chat(chat : users_chat_schema.UserChatBase , user : dict = Depends(dependecies.verify_token) , db : Session = Depends(get_db)):
     new_chat = users_chat_model.UserChat(
         user_id = user['user_id'],
-        title = chat.title,
         requirements = chat.requirements,
-        output_format = chat.output_format.value
     )
 
     db.add(new_chat)
@@ -60,9 +59,7 @@ def create_chat(chat : users_chat_schema.UserChatBase , user : dict = Depends(de
             "message" : "New Chat created successfully",
             "data" : {
                 "chat_id" : str(new_chat.id),
-                "title" : new_chat.title,
                 "requirements" : new_chat.requirements,
-                "output_format" : new_chat.output_format
             }
         }
     )
@@ -97,6 +94,25 @@ def chat_message(chat_id : str , data : users_chat_schema.UserMessageBase , payl
                 "message" : "Chat Not Found"
             }
         )
+    
+    api_key = JWTutils.decrypt_api_key(existing_user.api_key)
+    
+    client = OpenAI(
+        api_key=api_key
+    )
+    
+    if chat.title.strip().lower() == "new chat":
+        response = client.chat.completions.create(
+            model = 'gpt-4o-mini',
+            messages=[
+                {"role" : "system" , "content" : "Generate a short, concise title (max 6 words) summarizing the user's request. Do not include quotes or extra text."},
+                {"role" : "user" , "content" : data.message}
+            ],
+            temperature=0.5
+        )
+        chat.title = response.choices[0].message.content
+        db.commit()
+        db.refresh(chat)
     
     messages = db.query(users_chat_model.UserMessage).filter(users_chat_model.UserMessage.chat_id == chat_id).order_by(users_chat_model.UserMessage.created_at).all()
 
@@ -163,8 +179,6 @@ def chat_message(chat_id : str , data : users_chat_schema.UserMessageBase , payl
     {format_instructions}
     """
 
-    api_key = JWTutils.decrypt_api_key(existing_user.api_key)
-
 
     llm = ChatOpenAI(
         model = 'gpt-4o-mini',
@@ -205,6 +219,7 @@ def chat_message(chat_id : str , data : users_chat_schema.UserMessageBase , payl
             "success": True,
             "message": "Response received",
             "data": {
+                "title" : chat.title,
                 "bdd": dependecies.format_bdd(parsed_output.bdd),
                 "excel_format": dependecies.convert_json_to_csv(parsed_output.excel_format)
             }
@@ -221,7 +236,6 @@ def list_chats(payload : dict = Depends(dependecies.verify_token) , db : Session
             "chat_id" : str(chat.id),
             "title" : chat.title,
             "requirements" : chat.requirements,
-            "output_format" : chat.output_format,
             "created_at" : str(chat.created_at)
         }
         for chat in Chats
@@ -331,7 +345,6 @@ def requirements(chat_id : UUID , db : Session = Depends(get_db) , payload : dic
             "data" : {
                 "title" : chat.title,
                 "requirements" : chat.requirements,
-                "output_format" : chat.output_format,
                 "created_at" : str(chat.created_at)
             }
         }
@@ -390,7 +403,6 @@ def update_chat_info(chat_id : str , chatInfo : users_chat_schema.UserChatUpdate
     
     chat.title = chatInfo.title if chatInfo.title is not None else chat.title
     chat.requirements = chatInfo.requirements if chatInfo.requirements is not None else chat.requirements
-    chat.output_format = chatInfo.output_format if chatInfo.output_format is not None else chat.output_format
 
     db.commit()
     db.refresh(chat)
@@ -403,7 +415,6 @@ def update_chat_info(chat_id : str , chatInfo : users_chat_schema.UserChatUpdate
             "data" : {
                 "title" : chat.title,
                 "requirements" : chat.requirements,
-                "output_format" : chat.output_format
             }
         }
     )
