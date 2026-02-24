@@ -545,19 +545,21 @@ async def update_chat_info(file : Optional[UploadFile] = File(None , description
     existing_user = get_user_by_email(payload['email'] , db)
 
     api_key = JWTutils.decrypt_api_key(existing_user.api_key)
-    
-    # Read file content into memory as bytes
-    pdf_bytes = await file.read()
 
-    # Process the PDF content in memory
-    text_content = dependecies.extract_text_from_pdf_bytes(pdf_bytes)
+    if file:
+        # Read file content into memory as bytes
+        pdf_bytes = await file.read()
 
-    # Pass the text content to your vector store builder
-    vector_store = dependecies.build_vectorstore(text_content , payload['email'] , api_key)
-    
+        # Process the PDF content in memory
+        text_content = dependecies.extract_text_from_pdf_bytes(pdf_bytes)
+
+        # Pass the text content to your vector store builder
+        vector_store = dependecies.build_vectorstore(text_content , payload['email'] , api_key)
+        
     chat.title = chatInfo.title if chatInfo.title is not None else chat.title
     chat.requirements = chatInfo.requirements if chatInfo.requirements is not None else chat.requirements
-    chat.document_name = file.filename
+    if file:
+        chat.document_name = file.filename
 
     db.commit()
     db.refresh(chat)
