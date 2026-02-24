@@ -13,6 +13,7 @@ class UserChat(Base):
     user_id = Column(Integer , ForeignKey("users.id" ,ondelete="CASCADE"))
     title = Column(String , default="New Chat")
     requirements = Column(String , default=None)
+    document_name = Column(String , default=None)
     created_at = Column(TIMESTAMP(timezone=True) , default=datetime.utcnow)
 
     user = relationship(
